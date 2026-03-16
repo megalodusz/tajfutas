@@ -1,0 +1,229 @@
+A kért módosításokat elvégeztem a kódon. Beépítettem egy vizuális listát (Checkpoint Tracker), amely valós időben mutatja, melyik pontnál tart a versenyző, és a "Kilépés" gomb is megkapta a megerősítő funkciót.
+
+Íme a frissített, teljes kód:
+
+HTML
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>QR Futam - Pályaválasztó</title>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        :root { --primary: #00ff88; --bg: #121212; --surface: #1e1e1e; --text: #ffffff; --accent: #292929; --error: #ff4444; --success: #44ff44; }
+        body { margin: 0; padding: 0; font-family: sans-serif; background-color: var(--bg); color: var(--text); display: flex; justify-content: center; overscroll-behavior: none; }
+        .app-container { width: 100%; max-width: 500px; min-height: 100vh; display: flex; flex-direction: column; padding: 15px; box-sizing: border-box; }
+        header h1 { text-align: center; color: var(--primary); font-size: 1.4rem; margin: 5px 0; text-transform: uppercase; }
+        
+        .timer-section { background: var(--surface); padding: 15px; border-radius: 20px; text-align: center; margin-bottom: 10px; border: 1px solid var(--accent); }
+        #stopper-kijelzo { font-family: monospace; font-size: 2.2rem; font-weight: bold; color: var(--primary); margin-bottom: 5px; }
+        #uzenet { font-size: 1.1rem; min-height: 3em; color: #ccc; line-height: 1.3; font-weight: 500; }
+
+        /* ÚJ: Ellenőrző pontok listája */
+        .checkpoint-list { 
+            display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-bottom: 15px; 
+            padding: 10px; background: rgba(255,255,255,0.05); border-radius: 12px;
+        }
+        .dot { 
+            width: 35px; height: 35px; border-radius: 50%; border: 2px solid #555; 
+            display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: bold; color: #777;
+        }
+        .dot.active { border-color: var(--primary); color: var(--primary); box-shadow: 0 0 10px rgba(0,255,136,0.3); }
+        .dot.done { background: var(--primary); border-color: var(--primary); color: #000; }
+
+        .scanner-section { flex-grow: 1; background: #000; border-radius: 20px; overflow: hidden; border: 2px solid var(--accent); position: relative; min-height: 200px; }
+        #olvaso-terulet { width: 100% !important; }
+        
+        .controls { margin-top: 15px; display: flex; flex-direction: column; gap: 8px; }
+        button { padding: 14px; border-radius: 12px; font-weight: bold; text-transform: uppercase; cursor: pointer; border: none; font-size: 0.85rem; }
+        #scan-toggle-btn { background: var(--primary); color: #000; font-size: 1.1rem; margin-bottom: 10px; }
+        #save-btn { background: var(--primary); color: #000; display: none; }
+        #abort-btn { background: var(--error); color: #fff; display: none; }
+        .btn-reset { background: var(--accent); color: #aaa; }
+        .btn-exit { background: #444; color: #fff; margin-top: 5px; }
+    </style>
+</head>
+<body>
+<div class="app-container">
+    <header><h1>QR Futam</h1></header>
+    
+    <div class="timer-section">
+        <div id="stopper-kijelzo">00:00.0</div>
+        <p id="uzenet">Melyik pályát szeretnéd választani?<br><small>Olvasd be a pálya kódját!</small></p>
+    </div>
+
+    <div id="pont-lista" class="checkpoint-list"></div>
+    
+    <div class="scanner-section">
+        <div id="olvaso-terulet"></div>
+    </div>
+
+    <div class="controls">
+        <button id="scan-toggle-btn">📷 Szkennelés Indítása</button>
+        <button id="save-btn">Eredmény Mentése (.txt)</button>
+        <button id="abort-btn">Futam Feladása</button>
+        <button class="btn-reset" onclick="location.reload()">Reset / Új pálya</button>
+        <button class="btn-exit" id="exit-btn">Kilépés</button>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const kijelzo = document.getElementById('stopper-kijelzo');
+        const uzenet = document.getElementById('uzenet');
+        const saveBtn = document.getElementById('save-btn');
+        const abortBtn = document.getElementById('abort-btn');
+        const scanBtn = document.getElementById('scan-toggle-btn');
+        const exitBtn = document.getElementById('exit-btn');
+        const pontListaContainer = document.getElementById('pont-lista');
+        
+        const html5QrCode = new Html5Qrcode("olvaso-terulet");
+        
+        let stopperFut = false, kezdIdo, intervallum, utolsoKod = "", utolsoIdo = 0;
+        let sorrend = []; 
+        let sorrendIndex = 0;
+        let isScanning = false;
+
+        // KILÉPÉS FUNKCIÓ
+        exitBtn.addEventListener('click', () => {
+            if (confirm("Biztosan ki szeretnél lépni az alkalmazásból?")) {
+                window.close();
+                // Biztonsági tartalék, ha a böngésző tiltja a window.close()-t scriptből
+                setTimeout(() => { 
+                    alert("A böngésződ biztonsági beállításai miatt kérjük, zárd be manuálisan a lapot."); 
+                }, 300);
+            }
+        });
+
+        // PONTOK MEGJELENÍTÉSE
+        function frissitPontLista() {
+            pontListaContainer.innerHTML = "";
+            sorrend.forEach((pont, index) => {
+                const dot = document.createElement('div');
+                dot.className = 'dot';
+                dot.textContent = pont;
+                if (index < sorrendIndex) dot.classList.add('done');
+                if (index === sorrendIndex) dot.classList.add('active');
+                pontListaContainer.appendChild(dot);
+            });
+        }
+
+        async function kameraKiBe() {
+            if (!isScanning) {
+                try {
+                    scanBtn.textContent = "⌛ Betöltés...";
+                    await html5QrCode.start(
+                        { facingMode: "environment" }, 
+                        { fps: 10, qrbox: 250 }, 
+                        onScanSuccess
+                    );
+                    isScanning = true;
+                    scanBtn.textContent = "🛑 Kamera Leállítása";
+                    scanBtn.style.background = "var(--error)";
+                    scanBtn.style.color = "#fff";
+                } catch (err) {
+                    uzenet.innerHTML = "<span style='color:var(--error)'>Kamera hiba! Ellenőrizd az engedélyeket!</span>";
+                    scanBtn.textContent = "📷 Szkennelés Indítása";
+                }
+            } else {
+                stopKamera();
+            }
+        }
+
+        async function stopKamera() {
+            try {
+                await html5QrCode.stop();
+                isScanning = false;
+                scanBtn.textContent = "📷 Szkennelés Indítása";
+                scanBtn.style.background = "var(--primary)";
+                scanBtn.style.color = "#000";
+            } catch (e) { console.log("Stop hiba:", e); }
+        }
+
+        scanBtn.addEventListener('click', kameraKiBe);
+
+        function frissit() {
+            const eltelt = Date.now() - kezdIdo;
+            const p = Math.floor(eltelt / 60000);
+            const m = Math.floor((eltelt % 60000) / 1000);
+            const tized = Math.floor((eltelt % 1000) / 100);
+            kijelzo.textContent = `${String(p).padStart(2,'0')}:${String(m).padStart(2,'0')}.${tized}`;
+        }
+
+        async function onScanSuccess(decodedText) {
+            const most = Date.now();
+            const szoveg = decodedText.toLowerCase().trim();
+            
+            if (szoveg === utolsoKod && (most - utolsoIdo < 2000)) return;
+            
+            if (navigator.vibrate) navigator.vibrate(100);
+            stopKamera(); 
+
+            // 1. PÁLYAVÁLASZTÁS
+            if (szoveg.startsWith('start:') && !stopperFut) {
+                const palyaAdat = szoveg.replace('start:', '');
+                sorrend = palyaAdat.split(',').map(s => s.trim()).filter(s => s !== "");
+                
+                if (sorrend.length > 0) {
+                    kezdIdo = Date.now(); stopperFut = true; sorrendIndex = 0;
+                    utolsoKod = szoveg; utolsoIdo = most;
+                    intervallum = setInterval(frissit, 100);
+                    frissitPontLista();
+                    uzenet.innerHTML = `<b style="color:var(--primary)">PÁLYA ELINDULT!</b><br>Keresd: <b>${sorrend[0]}</b>`;
+                    abortBtn.style.display = "block";
+                }
+                return;
+            }
+
+            if (stopperFut) {
+                // 2. ELLENŐRZŐ PONTOK
+                if (szoveg === sorrend[sorrendIndex]) {
+                    utolsoKod = szoveg; utolsoIdo = most;
+                    sorrendIndex++;
+                    frissitPontLista();
+                    if (sorrendIndex === sorrend.length) {
+                        uzenet.innerHTML = "<b>Minden pont megvan!</b><br>Irány a <b style='color:var(--primary)'>STOP</b>!";
+                    } else {
+                        uzenet.innerHTML = `Pont elérve: ${szoveg}<br>Következő: <b style='color:var(--primary)'>${sorrend[sorrendIndex]}</b>`;
+                    }
+                } 
+                // 3. STOP KÓD
+                else if (szoveg === 'stop') {
+                    if (sorrendIndex === sorrend.length) {
+                        stopperFut = false;
+                        clearInterval(intervallum);
+                        uzenet.innerHTML = "<b style='color:var(--primary)'>CÉLBA ÉRTÉL!</b><br>Mentsd el az eredményed!";
+                        saveBtn.style.display = "block";
+                        abortBtn.style.display = "none";
+                        scanBtn.style.display = "none";
+                    } else {
+                        uzenet.innerHTML = `<b style='color:var(--error)'>HIÁNYZÓ PONTOK!</b><br>Még ezek kellenek: ${sorrend.slice(sorrendIndex).join(', ')}`;
+                    }
+                }
+                else if (szoveg !== utolsoKod) {
+                    uzenet.innerHTML = `<b style='color:var(--error)'>Rossz pont!</b><br>Keresd ezt: <b style='color:var(--primary)'>${sorrend[sorrendIndex]}</b>`;
+                }
+            }
+        }
+
+        abortBtn.addEventListener('click', () => {
+            if (confirm("Valóban feladod a pályát?")) {
+                location.reload();
+            }
+        });
+
+        saveBtn.addEventListener('click', () => {
+            const nev = prompt("Neved:", "Versenyző");
+            if (!nev) return;
+            const tartalom = `--- QR FUTAM ---\nNév: ${nev}\nIdő: ${kijelzo.textContent}\nPontok: ${sorrend.join(',')}`;
+            const blob = new Blob([tartalom], { type: 'text/plain' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `eredmeny_${nev}.txt`;
+            link.click();
+        });
+    });
+</script>
+</body>
+</html>
